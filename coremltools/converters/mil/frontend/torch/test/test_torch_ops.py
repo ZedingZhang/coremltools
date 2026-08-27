@@ -3124,6 +3124,37 @@ class TestUpsample(TorchBaseTest):
             compute_unit=compute_unit,
         )
 
+    @pytest.mark.skipif(not _HAS_TORCH_EXPORT_API, reason="torch.export is not available")
+    def test_upsample_nearest1d_with_symbolic_output_size_followed_by_conv1d(self):
+        class Model(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.conv = nn.Conv1d(4, 4, 1, bias=False)
+
+            def forward(self, x):
+                x = nn.functional.interpolate(
+                    x, size=x.shape[-1] * 2, mode="nearest"
+                )
+                return self.conv(x)
+
+        input_data = torch.randn(1, 4, 8)
+        length = torch.export.Dim("length", min=2, max=64)
+        exported_model = export_torch_model_to_frontend(
+            Model().eval(),
+            input_data,
+            TorchFrontend.TORCHEXPORT,
+            torch_export_dynamic_shapes=({2: length},),
+        )
+
+        prog = ct.convert(
+            exported_model,
+            minimum_deployment_target=ct.target.iOS18,
+            convert_to="milinternal",
+        )
+
+        conv = prog.find_ops(op_type="conv", exactly_one=True)[0]
+        assert conv.x.rank == 3
+
     @pytest.mark.parametrize(
         "compute_unit, backend, frontend, scales",
         itertools.product(compute_units, backends, frontends, [2, 3, 4.5]),
