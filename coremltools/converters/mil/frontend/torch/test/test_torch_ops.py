@@ -3125,7 +3125,12 @@ class TestUpsample(TorchBaseTest):
         )
 
     @pytest.mark.skipif(not _HAS_TORCH_EXPORT_API, reason="torch.export is not available")
-    def test_upsample_nearest1d_with_symbolic_output_size_followed_by_conv1d(self):
+    @pytest.mark.parametrize(
+        "compute_unit, backend", itertools.product(compute_units, backends)
+    )
+    def test_upsample_nearest1d_with_symbolic_output_size_followed_by_conv1d(
+        self, compute_unit, backend
+    ):
         class Model(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -3137,23 +3142,23 @@ class TestUpsample(TorchBaseTest):
                 )
                 return self.conv(x)
 
-        input_data = torch.randn(1, 4, 8)
-        length = torch.export.Dim("length", min=2, max=64)
-        exported_model = export_torch_model_to_frontend(
+        input_shape = (1, 4, 8)
+        upper_bound_coreml = 64 if backend[0] == "mlprogram" else -1
+        upper_bound_torch = None if upper_bound_coreml == -1 else upper_bound_coreml
+        length_coreml = RangeDim(default=8, upper_bound=upper_bound_coreml)
+        length_torch = torch.export.Dim("length", min=2, max=upper_bound_torch)
+
+        self.run_compare_torch(
+            input_shape,
             Model().eval(),
-            input_data,
-            TorchFrontend.TORCHEXPORT,
-            torch_export_dynamic_shapes=({2: length},),
+            frontend=TorchFrontend.TORCHEXPORT,
+            backend=backend,
+            compute_unit=compute_unit,
+            converter_input_type=[
+                TensorType(shape=(1, 4, length_coreml), dtype=np.float32)
+            ],
+            torch_export_dynamic_shapes={"x": {2: length_torch}},
         )
-
-        prog = ct.convert(
-            exported_model,
-            minimum_deployment_target=ct.target.iOS18,
-            convert_to="milinternal",
-        )
-
-        conv = prog.find_ops(op_type="conv", exactly_one=True)[0]
-        assert conv.x.rank == 3
 
     @pytest.mark.parametrize(
         "compute_unit, backend, frontend, scales",
