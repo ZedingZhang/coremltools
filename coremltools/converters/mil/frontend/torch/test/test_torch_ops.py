@@ -20,7 +20,6 @@ import coremltools as ct
 from coremltools import RangeDim, Shape, TensorType
 from coremltools._deps import (
     _HAS_TORCH_AUDIO,
-    _HAS_TORCH_EXPORT_API,
     _HAS_TORCH_VISION,
     version_lt,
 )
@@ -3124,13 +3123,16 @@ class TestUpsample(TorchBaseTest):
             compute_unit=compute_unit,
         )
 
-    @pytest.mark.skipif(not _HAS_TORCH_EXPORT_API, reason="torch.export is not available")
     @pytest.mark.parametrize(
-        "compute_unit, backend", itertools.product(compute_units, backends)
+        "compute_unit, backend, frontend",
+        itertools.product(compute_units, backends, frontends),
     )
     def test_upsample_nearest1d_with_symbolic_output_size_followed_by_conv1d(
-        self, compute_unit, backend
+        self, compute_unit, backend, frontend
     ):
+        if frontend == TorchFrontend.EXECUTORCH:
+            pytest.xfail("executorch incorrectly propagates dynamic shape")
+
         class Model(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -3143,21 +3145,26 @@ class TestUpsample(TorchBaseTest):
                 return self.conv(x)
 
         input_shape = (1, 4, 8)
-        upper_bound_coreml = 64 if backend[0] == "mlprogram" else -1
-        upper_bound_torch = None if upper_bound_coreml == -1 else upper_bound_coreml
-        length_coreml = RangeDim(default=8, upper_bound=upper_bound_coreml)
-        length_torch = torch.export.Dim("length", min=2, max=upper_bound_torch)
+        converter_input_type = None
+        torch_export_dynamic_shapes = None
+        if frontend in TORCH_EXPORT_BASED_FRONTENDS:
+            upper_bound_coreml = 64 if backend[0] == "mlprogram" else -1
+            upper_bound_torch = None if upper_bound_coreml == -1 else upper_bound_coreml
+            length_coreml = RangeDim(default=8, upper_bound=upper_bound_coreml)
+            length_torch = torch.export.Dim("length", min=2, max=upper_bound_torch)
+            converter_input_type = [
+                TensorType(shape=(1, 4, length_coreml), dtype=np.float32)
+            ]
+            torch_export_dynamic_shapes = {"x": {2: length_torch}}
 
         self.run_compare_torch(
             input_shape,
             Model().eval(),
-            frontend=TorchFrontend.TORCHEXPORT,
+            frontend=frontend,
             backend=backend,
             compute_unit=compute_unit,
-            converter_input_type=[
-                TensorType(shape=(1, 4, length_coreml), dtype=np.float32)
-            ],
-            torch_export_dynamic_shapes={"x": {2: length_torch}},
+            converter_input_type=converter_input_type,
+            torch_export_dynamic_shapes=torch_export_dynamic_shapes,
         )
 
     @pytest.mark.parametrize(
