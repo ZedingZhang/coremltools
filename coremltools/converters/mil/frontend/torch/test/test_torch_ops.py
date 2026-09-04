@@ -3148,6 +3148,7 @@ class TestUpsample(TorchBaseTest):
         converter_input_type = None
         torch_export_dynamic_shapes = None
         if frontend in TORCH_EXPORT_BASED_FRONTENDS:
+            # Keep exported length symbolic; mlprogram requires a finite upper bound.
             upper_bound_coreml = 64 if backend[0] == "mlprogram" else -1
             upper_bound_torch = None if upper_bound_coreml == -1 else upper_bound_coreml
             length_coreml = RangeDim(default=8, upper_bound=upper_bound_coreml)
